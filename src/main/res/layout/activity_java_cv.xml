@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+
+    <RelativeLayout
+        android:id="@+id/rl_take_video_layout"
+        android:layout_width="fill_parent"
+        android:layout_height="320dip"
+        android:focusable="false" >
+
+        <SurfaceView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+    </RelativeLayout>
+
+    <Button
+
+        android:id="@+id/btn_record"
+        android:layout_below="@+id/rl_take_video_layout"
+        android:layout_width="200dip"
+        android:layout_height="60dip"
+        android:text="开始录制"
+        android:layout_centerHorizontal="true"
+        />
+
+</RelativeLayout>
