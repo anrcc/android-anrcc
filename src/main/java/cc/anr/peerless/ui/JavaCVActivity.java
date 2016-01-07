@@ -16,6 +16,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.RelativeLayout;
 
+import com.googlecode.javacv.FFmpegFrameRecorder;
 import com.googlecode.javacv.FrameRecorder;
 import com.googlecode.javacv.cpp.opencv_core;
 
@@ -29,7 +30,6 @@ import cc.anr.peerless.javacv.CONSTANTS;
 import cc.anr.peerless.javacv.CameraView;
 import cc.anr.peerless.javacv.NewFFmpegFrameRecorder;
 import cc.anr.peerless.javacv.RecorderParameters;
-import cc.anr.peerless.javacv.SavedFrames;
 import cc.anr.peerless.javacv.Util;
 
 import static com.googlecode.javacv.cpp.opencv_core.IPL_DEPTH_8U;
@@ -40,6 +40,7 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
     static {
         System.loadLibrary("checkneon");
     }
+
     //摄像头以及它的参数
     private Camera cameraDevice;
     private CameraView cameraView;
@@ -63,7 +64,6 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
     private Uri uriVideoPath = null;
 
 
-
     //音频的采样率，recorderParameters中会有默认值
     private int sampleRate = 44100;
 
@@ -72,14 +72,10 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
     private Thread audioThread;
 
 
-
-
     //音频时间戳
     private volatile long mAudioTimestamp = 0L;
     private long mLastAudioTimestamp = 0L;
-    private volatile long mAudioTimeRecorded;
     private long frameTime = 0L;
-
 
 
     //第一次按下屏幕时记录的时间
@@ -88,32 +84,44 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
     private int frameRate = 30;
 
 
-
     //判断是否录制
     boolean recording = false;
+
+    //录制线程处于准备状态
+    boolean ready = false;
+
     //每一幀的数据结构
-    private SavedFrames lastSavedframe = new SavedFrames(null, 0L);
-    //视频时间戳
-    private long mVideoTimestamp = 0L;
+    byte[] frameBytesData = null;
+
     //时候保存过视频文件
     private boolean isRecordingSaved = false;
 
     RelativeLayout takeVideoLayout;
     Button recordBtn;
+    private Camera.AutoFocusCallback myAutoFocusCallback = null;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_java_cv);
 
-        recordBtn=(Button)findViewById(R.id.btn_record);
+        recordBtn = (Button) findViewById(R.id.btn_record);
         recordBtn.setOnClickListener(this);
+        myAutoFocusCallback = new Camera.AutoFocusCallback() {
+            public void onAutoFocus(boolean success, Camera camera) {
+                if (success) {
+                    camera.setOneShotPreviewCallback(null);
+                } else {
+                }
+            }
+        };
+
         //javacv
-        takeVideoLayout = (RelativeLayout)findViewById(R.id.rl_take_video_layout);
+        takeVideoLayout = (RelativeLayout) findViewById(R.id.rl_take_video_layout);
         if (takeVideoLayout != null && takeVideoLayout.getChildCount() > 0)
             takeVideoLayout.removeAllViews();
 
 
-        if(setCamera()) {
+        if (setCamera()) {
             initVideoRecorder();
             cameraView = new CameraView(JavaCVActivity.this, cameraDevice, new CameraView.OnSurfaceChanged() {
                 @Override
@@ -124,36 +132,20 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
                 @Override
                 public void onPreviewFrame(byte[] data, Camera camera) {
 
-                    //计算时间戳
-                    long frameTimeStamp = 0L;
-                    if (mAudioTimestamp == 0L && firstTime > 0L) {
-                        frameTimeStamp = 1000L * (System.currentTimeMillis() - firstTime);
-                    } else if (mLastAudioTimestamp == mAudioTimestamp) {
-                        frameTimeStamp = mAudioTimestamp + frameTime;
-                    } else {
-                        long l2 = (System.nanoTime() - mAudioTimeRecorded) / 1000L;
-                        frameTimeStamp = l2 + mAudioTimestamp;
-                        mLastAudioTimestamp = mAudioTimestamp;
-                    }
+
 
                     //录制视频
                     if (recording) {
-                        if (lastSavedframe != null && lastSavedframe.getFrameBytesData() != null && yuvIplImage != null) {
+                        if (frameBytesData != null && yuvIplImage != null) {
 
-
-                            mVideoTimestamp += frameTime;
-                            if (lastSavedframe.getTimeStamp() > mVideoTimestamp) {
-                                mVideoTimestamp = lastSavedframe.getTimeStamp();
-                            }
-
-                            putByteData(lastSavedframe);
+                            putByteData(frameBytesData);
 
                         }
-                        Log.i("wcl","rotateYUV420Degree90 previewWidth======" + previewWidth + "  previewHeight======" + previewHeight);
+                        Log.i("wcl", "rotateYUV420Degree90 previewWidth======" + previewWidth + "  previewHeight======" + previewHeight);
 
                         byte[] tempData = rotateYUV420Degree90(data, previewWidth, previewHeight);
 
-                        lastSavedframe = new SavedFrames(tempData, frameTimeStamp);
+                        frameBytesData = tempData;
                     }
 
                     cameraDevice.addCallbackBuffer(bufferByte);
@@ -165,11 +157,10 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
 
 
             //设置surface的宽高
-            RelativeLayout.LayoutParams layoutParam = new RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT,RelativeLayout.LayoutParams.MATCH_PARENT);
+            RelativeLayout.LayoutParams layoutParam = new RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, RelativeLayout.LayoutParams.MATCH_PARENT);
             layoutParam.addRule(RelativeLayout.ALIGN_PARENT_TOP, RelativeLayout.TRUE);
             takeVideoLayout.addView(cameraView, layoutParam);
         }
-
 
 
     }
@@ -191,10 +182,11 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
 
     /**
      * 录制视频数据
-     * @param lastSavedframe
+     *
+     * @param
      */
-    public void putByteData(SavedFrames lastSavedframe){
-        yuvIplImage.getByteBuffer().put(lastSavedframe.getFrameBytesData());
+    public void putByteData(byte[] frameBytesData ) {
+        yuvIplImage.getByteBuffer().put(frameBytesData);
         try {
             videoRecorder.record(yuvIplImage);
         } catch (FrameRecorder.Exception e) {
@@ -204,7 +196,7 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
 
     }
 
-    public void handleSurfaceChanged(){
+    public void handleSurfaceChanged() {
         List<Camera.Size> tempList = cameraParameters.getSupportedPreviewSizes();
         Camera.Size csize = getOptimalPreviewSize(tempList, 320, 480);
 
@@ -236,7 +228,6 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
         cameraDevice.setParameters(cameraParameters);
 
 
-
     }
 
     /**
@@ -244,7 +235,8 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
      */
     public void startRecording() {
         try {
-            recording=true;
+            recording = true;
+            ready = true;
             videoRecorder.start();
             audioThread.start();
         } catch (NewFFmpegFrameRecorder.Exception e) {
@@ -262,9 +254,6 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
         }
 
     }
-
-
-
 
 
     private void initVideoRecorder() {
@@ -289,10 +278,8 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
         videoRecorder.setAudioBitrate(recorderParameters.getAudioBitrate());
 
 
-
         audioRecordRunnable = new AudioRecordRunnable();
         audioThread = new Thread(audioRecordRunnable);
-
 
 
     }
@@ -300,11 +287,11 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
     @Override
     public void onClick(View view) {
 
-        if(view.getId()==R.id.btn_record){
-            if(!recording){
+        if (view.getId() == R.id.btn_record) {
+            if (!recording) {
                 startRecording();
                 recordBtn.setText("停止");
-            }else{
+            } else {
                 saveRecording();
                 recordBtn.setText("开始");
             }
@@ -312,83 +299,72 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
     }
 
 
+
+
+
+    // ---------------------------------------------
+    // audio thread, gets and encodes audio data
+    // ---------------------------------------------
+
+
+    private AudioRecord audioRecord;
+
     /**
-     * 录制音频的线程
-     *
-     * @author QD
+     * 视频录制
      */
     class AudioRecordRunnable implements Runnable {
 
-        int bufferSize;
-        short[] audioData;
-        int bufferReadResult;
-        private final AudioRecord audioRecord;
-        public volatile boolean isInitialized;
-        private int mCount = 0;
-
-        private AudioRecordRunnable() {
-            bufferSize = AudioRecord.getMinBufferSize(sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize);
-            audioData = new short[bufferSize];
-        }
-
-        /**
-         * shortBuffer包含了音频的数据和起始位置
-         *
-         * @param shortBuffer
-         */
-        private void record(ShortBuffer shortBuffer) {
-            try {
-                if (videoRecorder != null) {
-                    this.mCount += shortBuffer.limit();
-                    videoRecorder.record(0, new Buffer[]{shortBuffer});
-                }
-            } catch (FrameRecorder.Exception localException) {
-
-            }
-            return;
-        }
-
-        /**
-         * 更新音频的时间戳
-         */
-        private void updateTimestamp() {
-            if (videoRecorder != null) {
-                int i = Util.getTimeStampInNsFromSampleCounted(this.mCount);
-                if (mAudioTimestamp != i) {
-                    mAudioTimestamp = i;
-                    mAudioTimeRecorded = System.nanoTime();
-                }
-            }
-        }
-
+        @Override
         public void run() {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
-            this.isInitialized = false;
-            if (audioRecord != null) {
-                //判断音频录制是否被初始化
-                while (this.audioRecord.getState() == 0) {
-                    try {
-                        Thread.sleep(100L);
-                    } catch (InterruptedException localInterruptedException) {
+
+            // Audio
+            int bufferSize;
+            short[] audioData;
+            int bufferReadResult;
+
+            bufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_CONFIGURATION_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_CONFIGURATION_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize);
+
+            audioData = new short[bufferSize];
+
+            Log.d("wcl", "audioRecord.startRecording()");
+            audioRecord.startRecording();
+
+			/* ffmpeg_audio encoding loop */
+            while (ready) {
+                // Log.v(LOG_TAG,"recording? " + recording);
+                bufferReadResult = audioRecord.read(audioData, 0, audioData.length);
+                if (bufferReadResult > 0) {
+                    // Log.v(LOG_TAG, "bufferReadResult: " + bufferReadResult);
+                    // If "recording" isn't true when start this thread, it
+                    // never get's set according to this if statement...!!!
+                    // Why? Good question...
+                    if (recording) {
+                        try {
+                            Buffer[] barray = new Buffer[1];
+                            barray[0] = ShortBuffer.wrap(audioData, 0, bufferReadResult);
+                            videoRecorder.record(barray);
+                            // Log.v(LOG_TAG,"recording " + 1024*i + " to " +
+                            // 1024*i+1024);
+                        } catch (FFmpegFrameRecorder.Exception e) {
+                            Log.v("wcl", e.getMessage());
+                            e.printStackTrace();
+                        }
                     }
                 }
-                this.isInitialized = true;
-                this.audioRecord.startRecording();
-                while (mVideoTimestamp > mAudioTimestamp) {
-                    updateTimestamp();
-                    bufferReadResult = this.audioRecord.read(audioData, 0, audioData.length);
-                    if ((bufferReadResult > 0) && ((recording ) || (mVideoTimestamp > mAudioTimestamp)))
-                        record(ShortBuffer.wrap(audioData, 0, bufferReadResult));
-                }
-                this.audioRecord.stop();
-                this.audioRecord.release();
+            }
+            Log.v("wcl", "AudioThread Finished, release audioRecord");
+
+			/* encoding finish, release recorder */
+            if (audioRecord != null) {
+                audioRecord.stop();
+                audioRecord.release();
+                audioRecord = null;
+                Log.v("wcl", "audioRecord released");
             }
         }
     }
-
 
 
     /**
@@ -449,7 +425,6 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
 
         yuvIplImage = null;
         videoRecorder = null;
-        lastSavedframe = null;
 
     }
 
@@ -506,9 +481,9 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
     }
 
 
-
     /**
      * 视频旋转
+     *
      * @param data
      * @param imageWidth
      * @param imageHeight
