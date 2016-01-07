@@ -29,7 +29,6 @@ import cc.anr.peerless.javacv.CONSTANTS;
 import cc.anr.peerless.javacv.CameraView;
 import cc.anr.peerless.javacv.NewFFmpegFrameRecorder;
 import cc.anr.peerless.javacv.RecorderParameters;
-import cc.anr.peerless.javacv.RecorderThread;
 import cc.anr.peerless.javacv.SavedFrames;
 import cc.anr.peerless.javacv.Util;
 
@@ -62,14 +61,12 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
     private File fileVideoPath = null;
     //视频文件在系统中存放的url
     private Uri uriVideoPath = null;
-    //录视频进程
-    private RecorderThread recorderThread;
+
 
 
     //音频的采样率，recorderParameters中会有默认值
     private int sampleRate = 44100;
-    //调用系统的录制音频类
-    private AudioRecord audioRecord;
+
     //录制音频的线程
     private AudioRecordRunnable audioRecordRunnable;
     private Thread audioThread;
@@ -149,7 +146,8 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
                                 mVideoTimestamp = lastSavedframe.getTimeStamp();
                             }
 
-                            recorderThread.putByteData(lastSavedframe);
+                            putByteData(lastSavedframe);
+
                         }
                         Log.i("wcl","rotateYUV420Degree90 previewWidth======" + previewWidth + "  previewHeight======" + previewHeight);
 
@@ -165,10 +163,6 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
 
             handleSurfaceChanged();
 
-            if (recorderThread == null) {
-                recorderThread = new RecorderThread(yuvIplImage, videoRecorder);
-                recorderThread.start();
-            }
 
             //设置surface的宽高
             RelativeLayout.LayoutParams layoutParam = new RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT,RelativeLayout.LayoutParams.MATCH_PARENT);
@@ -194,6 +188,21 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
         return true;
     }
 
+
+    /**
+     * 录制视频数据
+     * @param lastSavedframe
+     */
+    public void putByteData(SavedFrames lastSavedframe){
+        yuvIplImage.getByteBuffer().put(lastSavedframe.getFrameBytesData());
+        try {
+            videoRecorder.record(yuvIplImage);
+        } catch (FrameRecorder.Exception e) {
+            Log.i("recorder", "录制错误" + e.getMessage());
+            e.printStackTrace();
+        }
+
+    }
 
     public void handleSurfaceChanged(){
         List<Camera.Size> tempList = cameraParameters.getSupportedPreviewSizes();
@@ -403,7 +412,6 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
 
         @Override
         protected Void doInBackground(Void... params) {
-            recorderThread.stopRecord(this);
             if (videoRecorder != null && recording) {
                 recording = false;
                 releaseResources();
@@ -429,7 +437,6 @@ public class JavaCVActivity extends Activity implements View.OnClickListener {
      * 释放资源，停止录制视频和音频
      */
     private void releaseResources() {
-        recorderThread.finish();
         isRecordingSaved = true;
         try {
             if (videoRecorder != null) {
