@@ -1,1 +1,7 @@
 /build
+.idea/
+android-anrcc.iml
+gradle/
+gradlew
+gradlew.bat
+local.properties
